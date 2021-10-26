@@ -52,7 +52,14 @@ class EnteliwebExporter:
             },
             verify=self.verify,
         )
-        values = list(map(lambda x: float(x.strip('"')), s.text.lstrip('[').rstrip(']').split(',')[:-3]))
+        returned_values = s.text.lstrip('[').rstrip(']').split(',')[:-3]
+        values = []
+        for value in returned_values:
+            try:
+                values.append(float(value.strip('"')))
+            except ValueError:
+                values.append(None)
+                logging.error("Could not convert value of sensor {} to float".format(device_ids[len(values)]))
         return list(zip(device_ids, values))
 
     def collect(self):
