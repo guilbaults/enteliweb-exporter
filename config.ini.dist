@@ -1,0 +1,11 @@
+[enteliweb]
+host = https://server
+username = user
+password = changeme
+insecure = false
+
+[exporter]
+port = 8085
+
+[devices]
+//A site/10000.AO001 = MOD_VFD_PUMP, Pump modulation
