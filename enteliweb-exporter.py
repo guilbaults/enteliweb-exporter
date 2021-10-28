@@ -39,6 +39,8 @@ class EnteliwebExporter:
             sys.exit(1)
         else:
             logging.info("Login successful")
+            self.username = username
+            self.password = password
 
         self.update_csrf_token()
 
@@ -52,6 +54,21 @@ class EnteliwebExporter:
             },
             verify=self.verify,
         )
+        if s.status_code == 401:
+            # Login again
+            logging.info("Login expired, logging in again")
+            self.login(self.username, self.password)
+            # Try again
+            s = self.session.post("{}/enteliweb/wsbacv3/getvalue".format(self.host),
+                data = {
+                    "input": device_ids_str,
+                    "_csrfToken": self.csrf_token,
+                },
+                verify=self.verify,
+            )
+            if s.status_code == 401:
+                logging.error("Login failed again")
+                sys.exit(1)
         returned_values = s.text.lstrip('[').rstrip(']').split(',')[:-3]
         values = []
         for value in returned_values:
