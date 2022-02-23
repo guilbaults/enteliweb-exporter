@@ -18,7 +18,7 @@ class EnteliwebExporter:
         self.verify = verify
 
     def update_csrf_token(self):
-        s = self.session.get("{}/enteliweb/".format(self.host), verify=self.verify)
+        s = self.session.get("{}/enteliweb/".format(self.host), verify=self.verify, timeout=10)
         # grab the csrf token from the html
         self.csrf_token = re.search(r'_token\s+= \"(.*)\";', s.text).group(1)
 
@@ -32,7 +32,8 @@ class EnteliwebExporter:
                 "password": base64.b64encode(password.encode('ascii')),
                 "_csrfToken": self.csrf_token
             },
-            verify=self.verify
+            verify=self.verify,
+            timeout=10
         )
         if s.json()['success'] is not True:
             logging.error("Login failed")
@@ -53,6 +54,7 @@ class EnteliwebExporter:
                 "_csrfToken": self.csrf_token,
             },
             verify=self.verify,
+            timeout=60
         )
         if s.status_code == 401:
             # Login again
@@ -65,6 +67,7 @@ class EnteliwebExporter:
                     "_csrfToken": self.csrf_token,
                 },
                 verify=self.verify,
+                timeout=10
             )
             if s.status_code == 401:
                 logging.error("Login failed again")
