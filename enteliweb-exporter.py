@@ -79,14 +79,18 @@ class EnteliwebExporter:
                 values.append(float(value.strip('"')))
             except ValueError:
                 values.append(None)
-                logging.error("Could not convert value of sensor {} to float".format(device_ids[len(values)]))
+                try:
+                    logging.error("Could not convert value of sensor {} to float".format(device_ids[len(values)]))
+                except IndexError:
+                    logging.error("Sensor index out of range")
         return list(zip(device_ids, values))
 
     def collect(self):
         for sensor in eweb.get_values(self.devices):
-            gauge_enteliweb = GaugeMetricFamily('enteliweb_' + sensor[0][1], sensor[0][2], labels=[])
-            gauge_enteliweb.add_metric([], sensor[1])
-            yield gauge_enteliweb
+            if sensor[1] is not None:
+                gauge_enteliweb = GaugeMetricFamily('enteliweb_' + sensor[0][1], sensor[0][2], labels=[])
+                gauge_enteliweb.add_metric([], sensor[1])
+                yield gauge_enteliweb
 
 
 class NoLoggingWSGIRequestHandler(WSGIRequestHandler):
