@@ -76,11 +76,15 @@ class EnteliwebExporter:
         values = []
         for value in returned_values:
             try:
-                values.append(float(value.strip('"')))
+                v = value.strip('"')
+                if v == 'inactive':
+                    values.append(float(-1)) # -1 is used to indicate that the sensor is inactive
+                else:
+                    values.append(float(v))
             except ValueError:
                 values.append(None)
                 try:
-                    logging.error("Could not convert value of sensor {} to float".format(device_ids[len(values)]))
+                    logging.error("Could not convert value of sensor {} to float ({})".format(device_ids[len(values)-1], value))
                 except IndexError:
                     logging.error("Sensor index out of range")
         return list(zip(device_ids, values))
