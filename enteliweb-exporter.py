@@ -79,6 +79,8 @@ class EnteliwebExporter:
                 v = value.strip('"')
                 if v == 'inactive':
                     values.append(float(-1)) # -1 is used to indicate that the sensor is inactive
+                elif v == 'active':
+                    values.append(float(1))
                 else:
                     values.append(float(v))
             except ValueError:
