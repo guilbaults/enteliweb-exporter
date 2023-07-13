@@ -72,6 +72,9 @@ class EnteliwebExporter:
             if s.status_code == 401:
                 logging.error("Login failed again")
                 sys.exit(1)
+        if 'getcaptch' in s.text:
+            logging.error("Got a captcha, lets die and retry")
+            sys.exit(1)
         returned_values = s.text.lstrip('[').rstrip(']').split(',')[:-3]
         values = []
         for value in returned_values:
