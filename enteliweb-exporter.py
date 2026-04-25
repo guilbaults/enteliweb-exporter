@@ -4,11 +4,9 @@ import sys
 import re
 import base64
 import configparser
-from prometheus_client.core import CounterMetricFamily, GaugeMetricFamily
-from prometheus_client import make_wsgi_app
-from wsgiref.simple_server import make_server, WSGIRequestHandler
 import logging
 import argparse
+import http.server
 
 class EnteliwebExporter:
     def __init__(self, host, devices, verify):
@@ -95,22 +93,59 @@ class EnteliwebExporter:
         return list(zip(device_ids, values))
 
     def collect(self):
-        for sensor in eweb.get_values(self.devices):
-            if sensor[1] is not None:
-                gauge_enteliweb = GaugeMetricFamily('enteliweb_' + sensor[0][1], sensor[0][2], labels=[])
-                gauge_enteliweb.add_metric([], sensor[1])
-                yield gauge_enteliweb
+        values = self.get_values(self.devices)
+
+        type_map = {'AI': 'analog_input', 'AO': 'analog_output', 'AV': 'analog_value'}
+        groups = {}
+
+        for sensor, value in values:
+            if value is None:
+                continue
+
+            bacnet_id = sensor[0]
+            label = sensor[1]
+
+            suffix = re.search(r'\.(AI|AO|AV)\d+', bacnet_id, re.IGNORECASE)
+            metric_type = type_map.get(suffix.group(1).upper() if suffix else '', 'gauge')
+
+            if metric_type not in groups:
+                groups[metric_type] = []
+            groups[metric_type].append((bacnet_id, label, value))
+
+        lines = []
+        for metric_type in sorted(groups.keys()):
+            metric_name = 'enteliweb_' + metric_type
+            desc = metric_type.replace('_', ' ') + ' point'
+            lines.append(f'# HELP {metric_name} Current value of {desc}')
+            lines.append(f'# TYPE {metric_name} gauge')
+            for bacnet_id, label, value in groups[metric_type]:
+                lines.append(f'{metric_name}{{bacnet_id="{bacnet_id}", label="{label}"}} {value}')
+            lines.append('')
+        return '\n'.join(lines)
 
 
-class NoLoggingWSGIRequestHandler(WSGIRequestHandler):
+class MetricsHandler(http.server.BaseHTTPRequestHandler):
+
     def log_message(self, format, *args):
         pass
+
+    def do_GET(self):
+        if self.path == '/metrics':
+            body = eweb.collect().encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain; version=0.0.4; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(body)
+        else:
+            self.send_response(404)
+            self.end_headers()
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Enteliweb exporter')
     parser.add_argument('config')
     parser.add_argument('--log-level', default='INFO')
+    parser.add_argument('--debug', action='store_true', help='Print metrics to stdout and exit')
     args = parser.parse_args()
 
     config = configparser.ConfigParser()
@@ -135,6 +170,9 @@ if __name__ == '__main__':
     eweb = EnteliwebExporter(config['enteliweb']['host'], devices, verify)
     eweb.login(config['enteliweb']['username'], config['enteliweb']['password'])
 
-    app = make_wsgi_app(eweb)
-    httpd = make_server('', int(config['exporter']['port']), app)
-    httpd.serve_forever()
+    if args.debug:
+        print(eweb.collect())
+    else:
+        httpd = http.server.HTTPServer(('', int(config['exporter']['port'])), MetricsHandler)
+        logging.info(f'Serving metrics on port {config["exporter"]["port"]}')
+        httpd.serve_forever()
