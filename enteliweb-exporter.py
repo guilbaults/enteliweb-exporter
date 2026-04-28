@@ -7,6 +7,7 @@ import configparser
 import logging
 import argparse
 import http.server
+import time
 
 class EnteliwebExporter:
     def __init__(self, host, devices, verify):
@@ -92,35 +93,56 @@ class EnteliwebExporter:
                     logging.error("Sensor index out of range")
         return list(zip(device_ids, values))
 
+    def get_all_points(self, controller_regex):
+        # This will go through all the controllers and print the Ref and Name of each point
+        s = self.session.get("{}/enteliweb/wsds/getdevicelist?ObjRef=%2F%2F*%2F*.DEV*&searchStr=".format(self.host), verify=self.verify, timeout=10)
+        data = json.loads(s.text)
+        for key in data['deviceList']:
+            for controller in data['deviceList'][key]:
+                if not re.search(controller_regex, controller['Ref']):
+                    # If the controller doesn't match the regex, we skip it
+                    continue
+                try:
+                    s = self.session.post("https://enteliweb.si.ulaval.ca/enteliweb/wsdevice/objectlist",
+                        data = {
+                            "ObjRef": '["{}"]'.format(controller['Ref']),
+                            "_csrfToken": self.csrf_token,
+                            "query": "",
+                            "sort": "ObjectInstance ASC"
+                        },
+                        verify=self.verify,
+                        timeout=60
+                    )
+                except requests.exceptions.RequestException as e:
+                    logging.error(f"Error fetching points for controller {controller['Ref']}: {e}")
+                    continue
+                except json.JSONDecodeError as e:
+                    logging.error(f"Error decoding JSON for controller {controller['Ref']}: {e}")
+                    continue
+                objects = json.loads(s.text)['objects']
+                for obj in objects:
+                    # We only keep about AV, AI, AO, BI, BO, CO points
+                    if re.search(r'\.(AI|AO|AV|BI|BO|CO)\d+', obj['FullRef'], re.IGNORECASE):
+                        print(f'{obj["FullRef"]} = {obj["Name"]}')
+                time.sleep(1) # Sleep a bit to avoid overwhelming the server
+
     def collect(self):
-        values = self.get_values(self.devices)
-
-        type_map = {'AI': 'analog_input', 'AO': 'analog_output', 'AV': 'analog_value'}
-        groups = {}
-
-        for sensor, value in values:
-            if value is None:
-                continue
-
-            bacnet_id = sensor[0]
-            label = sensor[1]
-
-            suffix = re.search(r'\.(AI|AO|AV)\d+', bacnet_id, re.IGNORECASE)
-            metric_type = type_map.get(suffix.group(1).upper() if suffix else '', 'gauge')
-
-            if metric_type not in groups:
-                groups[metric_type] = []
-            groups[metric_type].append((bacnet_id, label, value))
-
         lines = []
-        for metric_type in sorted(groups.keys()):
-            metric_name = 'enteliweb_' + metric_type
-            desc = metric_type.replace('_', ' ') + ' point'
-            lines.append(f'# HELP {metric_name} Current value of {desc}')
-            lines.append(f'# TYPE {metric_name} gauge')
-            for bacnet_id, label, value in groups[metric_type]:
-                lines.append(f'{metric_name}{{bacnet_id="{bacnet_id}", label="{label}"}} {value}')
-            lines.append('')
+        metric_name = 'enteliweb_value'
+        lines.append(f'# HELP {metric_name} Current value')
+        lines.append(f'# TYPE {metric_name} gauge')
+        start_time = time.time()
+        values = self.get_values(self.devices)
+        end_time = time.time()
+
+        for sorted_value in sorted(values, key=lambda x: x[0]):
+            if sorted_value[1] is None:
+                continue
+            lines.append(f'{metric_name}{{bacnet_id="{sorted_value[0][0]}", label="{sorted_value[0][1]}"}} {sorted_value[1]}')
+
+        lines.append(f'# HELP enteliweb_scrape_duration_seconds Duration of the scrape in seconds')
+        lines.append(f'# TYPE enteliweb_scrape_duration_seconds gauge')
+        lines.append(f'enteliweb_scrape_duration_seconds {end_time - start_time}')
         return '\n'.join(lines)
 
 
@@ -146,6 +168,7 @@ if __name__ == '__main__':
     parser.add_argument('config')
     parser.add_argument('--log-level', default='INFO')
     parser.add_argument('--debug', action='store_true', help='Print metrics to stdout and exit')
+    parser.add_argument('--get-points', action='store', help='Print all points from controllers using a regex filter and exit. If "all" is specified, all points will be printed.')
     args = parser.parse_args()
 
     config = configparser.ConfigParser()
@@ -160,15 +183,24 @@ if __name__ == '__main__':
     else:
         verify = True
 
-    # Convert the format in the ini so the label and comment is splitted
     devices = []
-    for device in list(config['devices'].items()):
-        name_comment = device[1].split(',')
-        modified_device = (device[0], name_comment[0], name_comment[1].strip())
-        devices.append(modified_device)
+    with open(config['enteliweb']['devices_file'], 'r') as f:
+        for device in f.readlines():
+            # split the line with a regex
+            bacnet_id, label = re.split(r'\s*=\s*', device.strip(), maxsplit=2)
+            devices.append((bacnet_id, label))
+        logging.info(f"Loaded {len(devices)} devices from {config['enteliweb']['devices_file']}")
 
     eweb = EnteliwebExporter(config['enteliweb']['host'], devices, verify)
     eweb.login(config['enteliweb']['username'], config['enteliweb']['password'])
+
+    if args.get_points:
+        if args.get_points == 'all':
+            controller_regex = '.*'
+        else:
+            controller_regex = args.get_points
+        eweb.get_all_points(controller_regex = controller_regex)
+        sys.exit(0)
 
     if args.debug:
         print(eweb.collect())
