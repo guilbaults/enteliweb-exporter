@@ -97,6 +97,7 @@ class EnteliwebExporter:
         # This will go through all the controllers and print the Ref and Name of each point
         s = self.session.get("{}/enteliweb/wsds/getdevicelist?ObjRef=%2F%2F*%2F*.DEV*&searchStr=".format(self.host), verify=self.verify, timeout=10)
         data = json.loads(s.text)
+        lines = []
         for key in data['deviceList']:
             for controller in data['deviceList'][key]:
                 if not re.search(controller_regex, controller['Ref']):
@@ -123,8 +124,11 @@ class EnteliwebExporter:
                 for obj in objects:
                     # We only keep about AV, AI, AO, BI, BO, CO points
                     if re.search(r'\.(AI|AO|AV|BI|BO|CO)\d+', obj['FullRef'], re.IGNORECASE):
-                        print(f'{obj["FullRef"]} = {obj["Name"]}')
+                        lines.append(f'{obj["FullRef"]} = {obj["Name"]}')
                 time.sleep(1) # Sleep a bit to avoid overwhelming the server
+        with open('devices.txt', 'w') as f:
+            f.write('\n'.join(lines) + '\n')
+        logging.info(f"Saved {len(lines)} points to devices.txt")
 
     def collect(self):
         lines = []
