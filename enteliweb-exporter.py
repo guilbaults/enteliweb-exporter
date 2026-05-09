@@ -8,6 +8,9 @@ import logging
 import argparse
 import http.server
 import time
+import os
+from bs4 import BeautifulSoup
+from urllib.parse import quote
 
 class EnteliwebExporter:
     def __init__(self, host, devices, verify):
@@ -104,7 +107,7 @@ class EnteliwebExporter:
                     # If the controller doesn't match the regex, we skip it
                     continue
                 try:
-                    s = self.session.post("https://enteliweb.si.ulaval.ca/enteliweb/wsdevice/objectlist",
+                    s = self.session.post("{}/enteliweb/wsdevice/objectlist".format(self.host),
                         data = {
                             "ObjRef": '["{}"]'.format(controller['Ref']),
                             "_csrfToken": self.csrf_token,
@@ -129,6 +132,60 @@ class EnteliwebExporter:
         with open('devices.txt', 'w') as f:
             f.write('\n'.join(lines) + '\n')
         logging.info(f"Saved {len(lines)} points to devices.txt")
+
+    def get_controller_program(self, obj_ref):
+        url = "{}/enteliweb/object/display?ObjRef={}".format(self.host, quote(obj_ref, safe=''))
+        s = self.session.get(url, verify=self.verify, timeout=30)
+        soup = BeautifulSoup(s.text, 'html.parser')
+        editor_div = soup.find('div', id='div_Program_Editor')
+        if not editor_div:
+            return None
+        textarea = editor_div.find('textarea', id='Editor')
+        if not textarea:
+            return None
+        raw = textarea.get_text()
+        return json.loads(raw)[0]
+
+    def save_all_programs(self, controller_regex):
+        s = self.session.get("{}/enteliweb/wsds/getdevicelist?ObjRef=%2F%2F*%2F*.DEV*&searchStr=".format(self.host), verify=self.verify, timeout=10)
+        data = json.loads(s.text)
+        program_dir = 'controller_programs'
+        os.makedirs(program_dir, exist_ok=True)
+        count = 0
+        for key in data['deviceList']:
+            for controller in data['deviceList'][key]:
+                if not re.search(controller_regex, controller['Ref']):
+                    continue
+                try:
+                    s = self.session.post("{}/enteliweb/wsdevice/objectlist".format(self.host),
+                        data = {
+                            "ObjRef": '["{}"]'.format(controller['Ref']),
+                            "_csrfToken": self.csrf_token,
+                            "query": "",
+                            "sort": "ObjectInstance ASC"
+                        },
+                        verify=self.verify,
+                        timeout=60
+                    )
+                except requests.exceptions.RequestException as e:
+                    logging.error(f"Error fetching objects for controller {controller['Ref']}: {e}")
+                    continue
+                except json.JSONDecodeError as e:
+                    logging.error(f"Error decoding JSON for controller {controller['Ref']}: {e}")
+                    continue
+                objects = json.loads(s.text)['objects']
+                for obj in objects:
+                    if re.search(r'\.PG\d+$', obj['FullRef'], re.IGNORECASE):
+                        program_code = self.get_controller_program(obj['FullRef'])
+                        if program_code is not None:
+                            safe_name = re.sub(r'[^a-zA-Z0-9_\-]', '_', obj['FullRef'])
+                            filepath = os.path.join(program_dir, safe_name + '.txt')
+                            with open(filepath, 'w') as f:
+                                f.write(program_code)
+                            logging.info(f"Saved program for {obj['FullRef']} to {filepath}")
+                            count += 1
+                time.sleep(1)
+        logging.info(f"Saved {count} programs to {program_dir}/")
 
     def collect(self):
         lines = []
@@ -173,6 +230,7 @@ if __name__ == '__main__':
     parser.add_argument('--log-level', default='INFO')
     parser.add_argument('--debug', action='store_true', help='Print metrics to stdout and exit')
     parser.add_argument('--get-points', action='store', help='Print all points from controllers using a regex filter and exit. If "all" is specified, all points will be printed.')
+    parser.add_argument('--get-programs', action='store', help='Fetch all programs from controllers using a regex filter and save to controller_program/. If "all" is specified, all programs will be fetched.')
     args = parser.parse_args()
 
     config = configparser.ConfigParser()
@@ -204,6 +262,14 @@ if __name__ == '__main__':
         else:
             controller_regex = args.get_points
         eweb.get_all_points(controller_regex = controller_regex)
+        sys.exit(0)
+
+    if args.get_programs:
+        if args.get_programs == 'all':
+            controller_regex = '.*'
+        else:
+            controller_regex = args.get_programs
+        eweb.save_all_programs(controller_regex = controller_regex)
         sys.exit(0)
 
     if args.debug:
