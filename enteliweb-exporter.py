@@ -9,15 +9,24 @@ import argparse
 import http.server
 import time
 import os
+import threading
+import concurrent.futures
 from bs4 import BeautifulSoup
 from urllib.parse import quote
 
 class EnteliwebExporter:
-    def __init__(self, host, devices, verify):
+    def __init__(self, host, devices, verify, max_workers=5):
         self.host = host
-        self.session = requests.Session()
         self.devices = devices
         self.verify = verify
+        self.max_workers = max_workers
+        self.lock = threading.Lock()
+
+        pool_size = max_workers * 2
+        adapter = requests.adapters.HTTPAdapter(pool_connections=pool_size, pool_maxsize=pool_size)
+        self.session = requests.Session()
+        self.session.mount('http://', adapter)
+        self.session.mount('https://', adapter)
 
     def update_csrf_token(self):
         s = self.session.get("{}/enteliweb/".format(self.host), verify=self.verify, timeout=10)
@@ -47,43 +56,22 @@ class EnteliwebExporter:
 
         self.update_csrf_token()
 
-    def get_values(self, device_ids):
-        device_ids_str = '.Present_Value,'.join(map(lambda x: x[0], device_ids))
-        device_ids_str+='.Present_Value'
-        s = self.session.post("{}/enteliweb/wsbacv3/getvalue".format(self.host),
-            data = {
-                "input": device_ids_str,
-                "_csrfToken": self.csrf_token,
-            },
-            verify=self.verify,
-            timeout=60
-        )
-        if s.status_code == 401:
-            # Login again
-            logging.info("Login expired, logging in again")
-            self.login(self.username, self.password)
-            # Try again
-            s = self.session.post("{}/enteliweb/wsbacv3/getvalue".format(self.host),
-                data = {
-                    "input": device_ids_str,
-                    "_csrfToken": self.csrf_token,
-                },
-                verify=self.verify,
-                timeout=10
-            )
-            if s.status_code == 401:
-                logging.error("Login failed again")
-                sys.exit(1)
-        if 'getcaptch' in s.text:
+    @staticmethod
+    def _extract_controller(bacnet_id):
+        # Extract controller path from BACnet ID: //site/10000.AO001 -> //site/10000
+        return bacnet_id.rsplit('.', 1)[0]
+
+    def _parse_values(self, response_text, device_ids):
+        if 'getcaptch' in response_text:
             logging.error("Got a captcha, lets die and retry")
             sys.exit(1)
-        returned_values = s.text.lstrip('[').rstrip(']').split(',')[:-3]
+        returned_values = response_text.lstrip('[').rstrip(']').split(',')[:-3]
         values = []
         for value in returned_values:
             try:
                 v = value.strip('"')
                 if v == 'inactive':
-                    values.append(float(-1)) # -1 is used to indicate that the sensor is inactive
+                    values.append(float(-1))
                 elif v == 'active':
                     values.append(float(1))
                 else:
@@ -95,6 +83,63 @@ class EnteliwebExporter:
                 except IndexError:
                     logging.error("Sensor index out of range")
         return list(zip(device_ids, values))
+
+    def _fetch_controller_values(self, device_ids):
+        start_time = time.time()
+        device_ids_str = '.Present_Value,'.join(map(lambda x: x[0], device_ids))
+        device_ids_str += '.Present_Value'
+        data = {
+            "input": device_ids_str,
+            "_csrfToken": self.csrf_token,
+        }
+        s = self.session.post("{}/enteliweb/wsbacv3/getvalue".format(self.host),
+            data=data,
+            verify=self.verify,
+            timeout=60
+        )
+        if s.status_code == 401:
+            with self.lock:
+                logging.info("Login expired, logging in again")
+                self.login(self.username, self.password)
+                s = self.session.post("{}/enteliweb/wsbacv3/getvalue".format(self.host),
+                    data=data,
+                    verify=self.verify,
+                    timeout=60
+                )
+                if s.status_code == 401:
+                    logging.error("Login failed again")
+                    sys.exit(1)
+        elapsed = time.time() - start_time
+        return self._parse_values(s.text, device_ids), elapsed
+
+    def get_values(self, device_ids):
+        # Group devices by controller
+        controllers = {}
+        for dev in device_ids:
+            ctrl = self._extract_controller(dev[0])
+            if ctrl not in controllers:
+                controllers[ctrl] = []
+            controllers[ctrl].append(dev)
+
+        logging.info(f"Fetching values for {len(controllers)} controllers ({len(device_ids)} devices)")
+
+        all_values = []
+        controller_timings = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            future_to_controller = {
+                executor.submit(self._fetch_controller_values, devs): ctrl
+                for ctrl, devs in controllers.items()
+            }
+            for future in concurrent.futures.as_completed(future_to_controller):
+                ctrl = future_to_controller[future]
+                try:
+                    result, elapsed = future.result()
+                    all_values.extend(result)
+                    controller_timings.append((ctrl, elapsed))
+                except Exception as e:
+                    logging.error(f"Error fetching values for controller {ctrl}: {e}")
+
+        return all_values, controller_timings
 
     def get_all_points(self, controller_regex):
         # This will go through all the controllers and print the Ref and Name of each point
@@ -193,13 +238,18 @@ class EnteliwebExporter:
         lines.append(f'# HELP {metric_name} Current value')
         lines.append(f'# TYPE {metric_name} gauge')
         start_time = time.time()
-        values = self.get_values(self.devices)
+        values, controller_timings = self.get_values(self.devices)
         end_time = time.time()
 
         for sorted_value in sorted(values, key=lambda x: x[0]):
             if sorted_value[1] is None:
                 continue
             lines.append(f'{metric_name}{{bacnet_id="{sorted_value[0][0]}", label="{sorted_value[0][1]}"}} {sorted_value[1]}')
+
+        lines.append(f'# HELP enteliweb_controller_duration_seconds Duration to collect values per controller')
+        lines.append(f'# TYPE enteliweb_controller_duration_seconds gauge')
+        for ctrl, elapsed in controller_timings:
+            lines.append(f'enteliweb_controller_duration_seconds{{controller="{ctrl}"}} {elapsed:.3f}')
 
         lines.append(f'# HELP enteliweb_scrape_duration_seconds Duration of the scrape in seconds')
         lines.append(f'# TYPE enteliweb_scrape_duration_seconds gauge')
@@ -253,7 +303,8 @@ if __name__ == '__main__':
             devices.append((bacnet_id, label))
         logging.info(f"Loaded {len(devices)} devices from {config['enteliweb']['devices_file']}")
 
-    eweb = EnteliwebExporter(config['enteliweb']['host'], devices, verify)
+    max_workers = int(config['exporter'].get('max_workers', 5))
+    eweb = EnteliwebExporter(config['enteliweb']['host'], devices, verify, max_workers)
     eweb.login(config['enteliweb']['username'], config['enteliweb']['password'])
 
     if args.get_points:

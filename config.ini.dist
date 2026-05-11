@@ -7,3 +7,4 @@ devices_file = devices.txt
 
 [exporter]
 port = 8085
+max_workers = 5
