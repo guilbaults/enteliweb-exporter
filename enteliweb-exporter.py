@@ -174,9 +174,9 @@ class EnteliwebExporter:
                     if re.search(r'\.(AI|AO|AV|BI|BO|CO)\d+', obj['FullRef'], re.IGNORECASE):
                         lines.append(f'{obj["FullRef"]} = {obj["Name"]}')
                 time.sleep(1) # Sleep a bit to avoid overwhelming the server
-        with open('devices.txt', 'w') as f:
+        with open(config['enteliweb']['devices_file'], 'w') as f:
             f.write('\n'.join(lines) + '\n')
-        logging.info(f"Saved {len(lines)} points to devices.txt")
+        logging.info(f"Saved {len(lines)} points to {config['enteliweb']['devices_file']}")
 
     def get_controller_program(self, obj_ref):
         url = "{}/enteliweb/object/display?ObjRef={}".format(self.host, quote(obj_ref, safe=''))
@@ -296,6 +296,10 @@ if __name__ == '__main__':
         verify = True
 
     devices = []
+    # create file if it doesn't exist
+    if not os.path.exists(config['enteliweb']['devices_file']):
+        open(config['enteliweb']['devices_file'], 'w').close()
+
     with open(config['enteliweb']['devices_file'], 'r') as f:
         for device in f.readlines():
             # split the line with a regex
