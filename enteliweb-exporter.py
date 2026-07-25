@@ -1,5 +1,6 @@
 import requests
 import json
+import random
 import sys
 import re
 import base64
@@ -20,7 +21,7 @@ class EnteliwebExporter:
     def __init__(self, host, verify, discovery_ttl=3600):
         self.host = host
         self.verify = verify
-        self.discovery_ttl = discovery_ttl
+        self.discovery_ttl = discovery_ttl  # base TTL; actual expiry is randomised ±50%
         self.lock = threading.RLock()
         self._point_cache = {}
         self._in_discovery = set()
@@ -130,7 +131,7 @@ class EnteliwebExporter:
             with self.lock:
                 now = time.time()
                 cached = self._point_cache.get(controller_ref)
-                if cached and (now - cached['timestamp']) < self.discovery_ttl:
+                if cached and (now - cached['timestamp']) < cached.get('ttl', self.discovery_ttl):
                     return cached['points']
                 if controller_ref in self._in_discovery:
                     # If we've waited too long, the discovering thread likely
@@ -155,7 +156,11 @@ class EnteliwebExporter:
                     self._in_discovery.discard(controller_ref)
                 raise
             with self.lock:
-                self._point_cache[controller_ref] = {'points': points, 'timestamp': time.time()}
+                ttl = random.randint(int(self.discovery_ttl * 0.5),
+                                     int(self.discovery_ttl * 1.5))
+                self._point_cache[controller_ref] = {
+                    'points': points, 'timestamp': time.time(), 'ttl': ttl
+                }
                 self._in_discovery.discard(controller_ref)
             return points
 
