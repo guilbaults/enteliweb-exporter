@@ -31,7 +31,7 @@ class EnteliwebExporter:
         self.session.mount('https://', adapter)
 
     def update_csrf_token(self):
-        r = self.session.get("{}/enteliweb/".format(self.host), verify=self.verify, timeout=10)
+        r = self.session.get("{}/enteliweb/".format(self.host), verify=self.verify, timeout=60)
         match = re.search(r'_token\s+= \"(.*)\";', r.text)
         if not match:
             logging.error(
@@ -52,7 +52,7 @@ class EnteliwebExporter:
                     "_csrfToken": self.csrf_token
                 },
                 verify=self.verify,
-                timeout=10
+                timeout=60
             )
             if r.json()['success'] is not True:
                 logging.error(
@@ -68,7 +68,7 @@ class EnteliwebExporter:
 
     def _resolve_device_ref(self, controller_ref):
         r = self.session.get("{}/enteliweb/wsds/getdevicelist?ObjRef=%2F%2F*%2F*.DEV*&searchStr=".format(self.host),
-            verify=self.verify, timeout=10)
+            verify=self.verify, timeout=60)
         data = json.loads(r.text)
         for key in data['deviceList']:
             for ctrl in data['deviceList'][key]:
