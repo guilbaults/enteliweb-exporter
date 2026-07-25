@@ -180,13 +180,17 @@ class EnteliwebExporter:
                 values.append(None)
         return list(zip(refs, values))
 
-    def collect_controller(self, controller_ref):
+    def collect_controller(self, controller_ref, handler=None):
         lines = []
         metric_name = 'enteliweb_value'
         lines.append(f'# HELP {metric_name} Current value')
         lines.append(f'# TYPE {metric_name} gauge')
 
         points = self._get_or_discover(controller_ref)
+
+        if handler and handler.wfile.closed:
+            return  # client disconnected during discovery, save remaining work
+
         refs = [p['full_ref'] for p in points]
 
         if not refs:
@@ -275,7 +279,11 @@ class MetricsHandler(http.server.BaseHTTPRequestHandler):
             controller = controller.split(':')[0]
             logging.debug(f"Controller: {controller}")
 
-            body = eweb.collect_controller(controller).encode('utf-8')
+            body = eweb.collect_controller(controller, self)
+            if body is None:
+                return  # client disconnected during discovery
+
+            body = body.encode('utf-8')
             self.send_response(200)
             self.send_header('Content-Type', 'text/plain; version=0.0.4; charset=utf-8')
             self.end_headers()
