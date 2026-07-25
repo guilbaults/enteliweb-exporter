@@ -34,7 +34,10 @@ class EnteliwebExporter:
         r = self.session.get("{}/enteliweb/".format(self.host), verify=self.verify, timeout=10)
         match = re.search(r'_token\s+= \"(.*)\";', r.text)
         if not match:
-            logging.error("Could not extract CSRF token from Enteliweb root page")
+            logging.error(
+                "Exiting: could not extract CSRF token from %s — "
+                "response status %d, first 500 chars: %s",
+                self.host, r.status_code, r.text[:500])
             sys.exit(1)
         self.csrf_token = match.group(1)
 
@@ -52,7 +55,9 @@ class EnteliwebExporter:
                 timeout=10
             )
             if r.json()['success'] is not True:
-                logging.error("Login failed")
+                logging.error(
+                    "Exiting: login to %s failed — status %d, response: %s",
+                    self.host, r.status_code, r.text[:500])
                 sys.exit(1)
             else:
                 logging.info("Login successful")
@@ -69,7 +74,12 @@ class EnteliwebExporter:
             for ctrl in data['deviceList'][key]:
                 if ctrl['Ref'].startswith(controller_ref.rstrip('/') + '.'):
                     return ctrl['Ref']
-        logging.error(f"No device ref found for controller: {controller_ref}")
+        logging.error(
+            "Exiting: no device ref found for controller %s — "
+            "got %d devices from %s",
+            controller_ref,
+            sum(len(v) for v in data['deviceList'].values()),
+            self.host)
         sys.exit(1)
 
     def discover_points(self, controller_ref):
@@ -86,19 +96,20 @@ class EnteliwebExporter:
             timeout=60
         )
         if r.status_code == 401:
+            logging.info("Login expired during discovery, logging in again")
             with self.lock:
-                logging.info("Login expired during discovery, logging in again")
                 self.login(self.username, self.password)
-                r = self.session.post("{}/enteliweb/wsdevice/objectlist".format(self.host),
-                    data={
-                        "ObjRef": '["{}"]'.format(device_ref),
-                        "_csrfToken": self.csrf_token,
-                        "query": "",
-                        "sort": "ObjectInstance ASC"
-                    },
-                    verify=self.verify,
-                    timeout=60
-                )
+            device_ref = self._resolve_device_ref(controller_ref)
+            r = self.session.post("{}/enteliweb/wsdevice/objectlist".format(self.host),
+                data={
+                    "ObjRef": '["{}"]'.format(device_ref),
+                    "_csrfToken": self.csrf_token,
+                    "query": "",
+                    "sort": "ObjectInstance ASC"
+                },
+                verify=self.verify,
+                timeout=60
+            )
 
         objects = json.loads(r.text)['objects']
         points = []
@@ -113,6 +124,8 @@ class EnteliwebExporter:
         return points
 
     def _get_or_discover(self, controller_ref):
+        wait_start = time.time()
+        wait_timeout = 120  # max seconds to wait for another thread's discovery
         while True:
             with self.lock:
                 now = time.time()
@@ -120,6 +133,14 @@ class EnteliwebExporter:
                 if cached and (now - cached['timestamp']) < self.discovery_ttl:
                     return cached['points']
                 if controller_ref in self._in_discovery:
+                    # If we've waited too long, the discovering thread likely
+                    # crashed.  Nuke the stale entry and retry.
+                    if now - wait_start > wait_timeout:
+                        logging.warning(
+                            "Discovery for %s stalled for %ds — resetting and retrying",
+                            controller_ref, int(now - wait_start))
+                        self._in_discovery.discard(controller_ref)
+                        continue
                     waiting = True
                 else:
                     self._in_discovery.add(controller_ref)
@@ -127,7 +148,12 @@ class EnteliwebExporter:
             if waiting:
                 time.sleep(0.5)
                 continue  # another thread is discovering, wait and retry
-            points = self.discover_points(controller_ref)
+            try:
+                points = self.discover_points(controller_ref)
+            except Exception:
+                with self.lock:
+                    self._in_discovery.discard(controller_ref)
+                raise
             with self.lock:
                 self._point_cache[controller_ref] = {'points': points, 'timestamp': time.time()}
                 self._in_discovery.discard(controller_ref)
@@ -146,24 +172,31 @@ class EnteliwebExporter:
             timeout=60
         )
         if r.status_code == 401:
+            logging.info("Login expired during value fetch, logging in again")
             with self.lock:
-                logging.info("Login expired, logging in again")
                 self.login(self.username, self.password)
-                r = self.session.post("{}/enteliweb/wsbacv3/getvalue".format(self.host),
-                    data=data,
-                    verify=self.verify,
-                    timeout=60
-                )
-                if r.status_code == 401:
-                    logging.error("Login failed again")
-                    sys.exit(1)
+            data["_csrfToken"] = self.csrf_token
+            r = self.session.post("{}/enteliweb/wsbacv3/getvalue".format(self.host),
+                data=data,
+                verify=self.verify,
+                timeout=60
+            )
+            if r.status_code == 401:
+                logging.error(
+                    "Exiting: value fetch still 401 after re-login — "
+                    "status %d, response: %s",
+                    r.status_code, r.text[:500])
+                sys.exit(1)
 
         return self._parse_values(r.text, refs)
 
     @staticmethod
     def _parse_values(response_text, refs):
         if 'getcaptch' in response_text:
-            logging.error("Got a captcha, lets die and retry")
+            logging.error(
+                "Exiting: Enteliweb returned a captcha page — "
+                "session likely locked out. Response preview: %s",
+                response_text[:500])
             sys.exit(1)
         returned_values = response_text.lstrip('[').rstrip(']').split(',')[:-3]
         values = []
