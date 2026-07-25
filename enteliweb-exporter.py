@@ -46,14 +46,15 @@ class EnteliwebExporter:
         with self.lock:
             self.update_csrf_token()
 
-            r = self.session.post("{}/enteliweb/index/verify".format(self.host),
+            r = self.session.post(
+                "{}/enteliweb/index/verify".format(self.host),
                 data={
                     "userName": base64.b64encode(username.encode('ascii')),
                     "password": base64.b64encode(password.encode('ascii')),
-                    "_csrfToken": self.csrf_token
+                    "_csrfToken": self.csrf_token,
                 },
                 verify=self.verify,
-                timeout=60
+                timeout=60,
             )
             if r.json()['success'] is not True:
                 logging.error(
@@ -68,8 +69,12 @@ class EnteliwebExporter:
             self.update_csrf_token()
 
     def _resolve_device_ref(self, controller_ref):
-        r = self.session.get("{}/enteliweb/wsds/getdevicelist?ObjRef=%2F%2F*%2F*.DEV*&searchStr=".format(self.host),
-            verify=self.verify, timeout=60)
+        r = self.session.get(
+            "{}/enteliweb/wsds/getdevicelist?ObjRef=%2F%2F*%2F*.DEV*&searchStr="
+            .format(self.host),
+            verify=self.verify,
+            timeout=60,
+        )
         data = json.loads(r.text)
         for key in data['deviceList']:
             for ctrl in data['deviceList'][key]:
@@ -86,30 +91,32 @@ class EnteliwebExporter:
     def discover_points(self, controller_ref):
         start = time.time()
         device_ref = self._resolve_device_ref(controller_ref)
-        r = self.session.post("{}/enteliweb/wsdevice/objectlist".format(self.host),
+        r = self.session.post(
+            "{}/enteliweb/wsdevice/objectlist".format(self.host),
             data={
                 "ObjRef": '["{}"]'.format(device_ref),
                 "_csrfToken": self.csrf_token,
                 "query": "",
-                "sort": "ObjectInstance ASC"
+                "sort": "ObjectInstance ASC",
             },
             verify=self.verify,
-            timeout=60
+            timeout=60,
         )
         if r.status_code == 401:
             logging.info("Login expired during discovery, logging in again")
             with self.lock:
                 self.login(self.username, self.password)
             device_ref = self._resolve_device_ref(controller_ref)
-            r = self.session.post("{}/enteliweb/wsdevice/objectlist".format(self.host),
+            r = self.session.post(
+                "{}/enteliweb/wsdevice/objectlist".format(self.host),
                 data={
                     "ObjRef": '["{}"]'.format(device_ref),
                     "_csrfToken": self.csrf_token,
                     "query": "",
-                    "sort": "ObjectInstance ASC"
+                    "sort": "ObjectInstance ASC",
                 },
                 verify=self.verify,
-                timeout=60
+                timeout=60,
             )
 
         objects = json.loads(r.text)['objects']
@@ -164,27 +171,28 @@ class EnteliwebExporter:
                 self._in_discovery.discard(controller_ref)
             return points
 
-
     def _fetch_values(self, refs):
         refs_str = '.Present_Value,'.join(refs) + '.Present_Value'
         data = {
             "input": refs_str,
             "_csrfToken": self.csrf_token,
         }
-        r = self.session.post("{}/enteliweb/wsbacv3/getvalue".format(self.host),
+        r = self.session.post(
+            "{}/enteliweb/wsbacv3/getvalue".format(self.host),
             data=data,
             verify=self.verify,
-            timeout=60
+            timeout=60,
         )
         if r.status_code == 401:
             logging.info("Login expired during value fetch, logging in again")
             with self.lock:
                 self.login(self.username, self.password)
             data["_csrfToken"] = self.csrf_token
-            r = self.session.post("{}/enteliweb/wsbacv3/getvalue".format(self.host),
+            r = self.session.post(
+                "{}/enteliweb/wsbacv3/getvalue".format(self.host),
                 data=data,
                 verify=self.verify,
-                timeout=60
+                timeout=60,
             )
             if r.status_code == 401:
                 logging.error(
@@ -266,15 +274,16 @@ class EnteliwebExporter:
 
     def save_controller_programs(self, controller_ref):
         device_ref = self._resolve_device_ref(controller_ref)
-        r = self.session.post("{}/enteliweb/wsdevice/objectlist".format(self.host),
+        r = self.session.post(
+            "{}/enteliweb/wsdevice/objectlist".format(self.host),
             data={
                 "ObjRef": '["{}"]'.format(device_ref),
                 "_csrfToken": self.csrf_token,
                 "query": "",
-                "sort": "ObjectInstance ASC"
+                "sort": "ObjectInstance ASC",
             },
             verify=self.verify,
-            timeout=60
+            timeout=60,
         )
         objects = json.loads(r.text)['objects']
 
@@ -328,7 +337,9 @@ class MetricsHandler(http.server.BaseHTTPRequestHandler):
             try:
                 self.wfile.write(body)
             except BrokenPipeError:
-                logging.error("Broken pipe while writing metrics for controller=%s to %s", controller, self.client_address)
+                logging.error(
+                    "Broken pipe while writing metrics for controller=%s to %s",
+                    controller, self.client_address)
         elif self.path == '/health':
             self.send_response(200)
             self.send_header('Content-Type', 'text/plain; charset=utf-8')
@@ -375,7 +386,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Enteliweb exporter')
     parser.add_argument('config')
     parser.add_argument('--log-level', default='INFO')
-    parser.add_argument('--get-programs', action='store', help='Fetch all programs from a controller and save to controller_programs/. Pass the controller ref, e.g. //site/10000')
+    parser.add_argument(
+        '--get-programs', action='store',
+        help='Fetch all programs from a controller and save to '
+        'controller_programs/. Pass the controller ref, e.g. //site/10000')
     args = parser.parse_args()
 
     config = configparser.ConfigParser()
