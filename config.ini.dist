@@ -7,3 +7,4 @@ insecure = false
 [exporter]
 port = 8085
 discovery_ttl = 3600
+max_workers = 50
