@@ -296,6 +296,35 @@ class MetricsHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
 
 
+class BoundedThreadPoolHTTPServer(socketserver.TCPServer):
+    """HTTP server that processes requests in a fixed-size thread pool.
+
+    Unlike ThreadingHTTPServer (which spawns an unbounded new thread per
+    request), this server reuses a bounded pool of worker threads.  If all
+    workers are busy, incoming connections queue up instead of exhausting
+    OS threads.
+    """
+    allow_reuse_address = True
+    daemon_threads = True
+
+    def __init__(self, server_address, RequestHandlerClass, max_workers=10):
+        super().__init__(server_address, RequestHandlerClass)
+        self.executor = ThreadPoolExecutor(max_workers=max_workers)
+
+    def process_request(self, request, client_address):
+        self.executor.submit(self.process_request_thread, request, client_address)
+
+    def process_request_thread(self, request, client_address):
+        try:
+            self.finish_request(request, client_address)
+        except Exception:
+            self.handle_error(request, client_address)
+
+    def server_close(self):
+        self.executor.shutdown(wait=True)
+        super().server_close()
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Enteliweb exporter')
     parser.add_argument('config')
@@ -328,32 +357,3 @@ if __name__ == '__main__':
     httpd = BoundedThreadPoolHTTPServer(('', port), MetricsHandler, max_workers=max_workers)
     logging.info(f'Serving metrics on port {port} (max {max_workers} concurrent workers)')
     httpd.serve_forever()
-
-
-class BoundedThreadPoolHTTPServer(socketserver.TCPServer):
-    """HTTP server that processes requests in a fixed-size thread pool.
-
-    Unlike ThreadingHTTPServer (which spawns an unbounded new thread per
-    request), this server reuses a bounded pool of worker threads.  If all
-    workers are busy, incoming connections queue up instead of exhausting
-    OS threads.
-    """
-    allow_reuse_address = True
-    daemon_threads = True
-
-    def __init__(self, server_address, RequestHandlerClass, max_workers=10):
-        super().__init__(server_address, RequestHandlerClass)
-        self.executor = ThreadPoolExecutor(max_workers=max_workers)
-
-    def process_request(self, request, client_address):
-        self.executor.submit(self.process_request_thread, request, client_address)
-
-    def process_request_thread(self, request, client_address):
-        try:
-            self.finish_request(request, client_address)
-        except Exception:
-            self.handle_error(request, client_address)
-
-    def server_close(self):
-        self.executor.shutdown(wait=True)
-        super().server_close()
