@@ -158,7 +158,7 @@ class EnteliwebExporter:
             with self.lock:
                 now = time.time()
                 cached = self._point_cache.get(controller_ref)
-                if cached and (now - cached['timestamp']) < cached.get('ttl', self.discovery_ttl):
+                if cached and (now - cached['timestamp']) < cached['ttl']:
                     return cached['points']
                 if controller_ref in self._in_discovery:
                     # If we've waited too long, the discovering thread likely
