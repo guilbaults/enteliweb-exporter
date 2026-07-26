@@ -288,7 +288,7 @@ class EnteliwebExporter:
         raw = textarea.get_text()
         return json.loads(raw)[0]
 
-    def save_controller_programs(self, controller_ref):
+    def fetch_controller_programs(self, controller_ref):
         device_ref = self._resolve_device_ref(controller_ref)
         r = self.session.post(
             "{}/enteliweb/wsdevice/objectlist".format(self.host),
@@ -319,7 +319,7 @@ class EnteliwebExporter:
                         f.write(program_code)
                     logging.info(f"Saved program for {obj['FullRef']} to {filepath}")
                     count += 1
-        logging.info(f"Saved {count} programs for {controller_ref} to {program_dir}/")
+        logging.info(f"Fetched {count} programs for {controller_ref} to {program_dir}/")
 
 
 class MetricsHandler(http.server.BaseHTTPRequestHandler):
@@ -440,7 +440,7 @@ if __name__ == '__main__':
     eweb.login(config['enteliweb']['username'], config['enteliweb']['password'])
 
     if args.get_programs:
-        eweb.save_controller_programs(args.get_programs)
+        eweb.fetch_controller_programs(args.get_programs)
         sys.exit(0)
 
     port = int(config['exporter']['port'])
