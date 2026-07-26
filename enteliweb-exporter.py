@@ -259,8 +259,9 @@ class EnteliwebExporter:
         values = self._fetch_values(refs)
 
         if all(val is None for _, val in values):
-            logging.error("Controller %s appears to be offline — all points returned invalid values", controller_ref)
-            return '\n'.join(lines)
+            logging.debug("Controller %s appears to be offline — all points returned invalid values", controller_ref)
+            msg = 'Controller {} appears to be offline — all points returned invalid values\n'.format(controller_ref)
+            return (503, msg)
 
         point_map = {p['full_ref']: p for p in points}
         for ref, val in sorted(values, key=lambda x: x[0]):
@@ -346,6 +347,18 @@ class MetricsHandler(http.server.BaseHTTPRequestHandler):
             body = eweb.collect_controller(controller, self)
             if body is None:
                 return  # client disconnected during discovery
+
+            if isinstance(body, tuple):
+                status_code, error_body = body
+                body = error_body.encode('utf-8')
+                self.send_response(status_code)
+                self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                self.end_headers()
+                try:
+                    self.wfile.write(body)
+                except BrokenPipeError:
+                    logging.error("Broken pipe while writing error response to %s", self.client_address)
+                return
 
             body = body.encode('utf-8')
             self.send_response(200)
