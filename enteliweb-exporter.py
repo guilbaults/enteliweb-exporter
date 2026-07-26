@@ -270,6 +270,7 @@ class EnteliwebExporter:
                 continue
             info = point_map.get(ref, {})
             label = info.get('name', '')
+            label = label.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
             lines.append(f'{metric_name}{{bacnet_id="{ref}", label="{label}"}} {val}')
 
         return '\n'.join(lines)
