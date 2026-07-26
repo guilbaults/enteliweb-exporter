@@ -56,7 +56,11 @@ class EnteliwebExporter:
                 verify=self.verify,
                 timeout=60,
             )
-            if r.json()['success'] is not True:
+            try:
+                login_ok = r.json()['success']
+            except json.JSONDecodeError:
+                self._save_response_and_exit(r)
+            if login_ok is not True:
                 logging.error(
                     "Exiting: login to %s failed — status %d, response: %s",
                     self.host, r.status_code, r.text[:500])
@@ -68,6 +72,16 @@ class EnteliwebExporter:
 
             self.update_csrf_token()
 
+    @staticmethod
+    def _save_response_and_exit(response):
+        with open("debug_response.html", 'w') as f:
+            f.write(response.text)
+        logging.error(
+            "Exiting: JSON parse failed for %s (status %d) — "
+            "raw response saved to debug_response.html",
+            response.url, response.status_code)
+        sys.exit(1)
+
     def _resolve_device_ref(self, controller_ref):
         r = self.session.get(
             "{}/enteliweb/wsds/getdevicelist?ObjRef=%2F%2F*%2F*.DEV*&searchStr="
@@ -75,7 +89,10 @@ class EnteliwebExporter:
             verify=self.verify,
             timeout=60,
         )
-        data = json.loads(r.text)
+        try:
+            data = json.loads(r.text)
+        except json.JSONDecodeError:
+            self._save_response_and_exit(r)
         for key in data['deviceList']:
             for ctrl in data['deviceList'][key]:
                 if ctrl['Ref'].startswith(controller_ref.rstrip('/') + '.'):
@@ -119,7 +136,10 @@ class EnteliwebExporter:
                 timeout=60,
             )
 
-        objects = json.loads(r.text)['objects']
+        try:
+            objects = json.loads(r.text)['objects']
+        except json.JSONDecodeError:
+            self._save_response_and_exit(r)
         points = []
         for obj in objects:
             if re.search(r'\.(AI|AO|AV|BI|BO|CO)\d+', obj['FullRef'], re.IGNORECASE):
@@ -205,12 +225,6 @@ class EnteliwebExporter:
 
     @staticmethod
     def _parse_values(response_text, refs):
-        if 'getcaptch' in response_text:
-            logging.error(
-                "Exiting: Enteliweb returned a captcha page — "
-                "session likely locked out. Response preview: %s",
-                response_text[:500])
-            sys.exit(1)
         returned_values = response_text.lstrip('[').rstrip(']').split(',')[:-3]
         values = []
         for value in returned_values:
@@ -285,7 +299,10 @@ class EnteliwebExporter:
             verify=self.verify,
             timeout=60,
         )
-        objects = json.loads(r.text)['objects']
+        try:
+            objects = json.loads(r.text)['objects']
+        except json.JSONDecodeError:
+            self._save_response_and_exit(r)
 
         program_dir = 'controller_programs'
         os.makedirs(program_dir, exist_ok=True)
