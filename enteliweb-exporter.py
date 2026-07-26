@@ -25,6 +25,7 @@ class EnteliwebExporter:
         self.lock = threading.RLock()
         self._point_cache = {}
         self._in_discovery = set()
+        self._logging_in = False  # guard against concurrent re-login
 
         adapter = requests.adapters.HTTPAdapter(pool_connections=50, pool_maxsize=50)
         self.session = requests.Session()
@@ -122,7 +123,12 @@ class EnteliwebExporter:
         if r.status_code == 401:
             logging.info("Login expired during discovery, logging in again")
             with self.lock:
-                self.login(self.username, self.password)
+                if not self._logging_in:
+                    self._logging_in = True
+                    try:
+                        self.login(self.username, self.password)
+                    finally:
+                        self._logging_in = False
             device_ref = self._resolve_device_ref(controller_ref)
             r = self.session.post(
                 "{}/enteliweb/wsdevice/objectlist".format(self.host),
@@ -206,7 +212,12 @@ class EnteliwebExporter:
         if r.status_code == 401:
             logging.info("Login expired during value fetch, logging in again")
             with self.lock:
-                self.login(self.username, self.password)
+                if not self._logging_in:
+                    self._logging_in = True
+                    try:
+                        self.login(self.username, self.password)
+                    finally:
+                        self._logging_in = False
             data["_csrfToken"] = self.csrf_token
             r = self.session.post(
                 "{}/enteliweb/wsbacv3/getvalue".format(self.host),
