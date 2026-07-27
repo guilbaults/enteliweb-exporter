@@ -83,7 +83,7 @@ class EnteliwebExporter:
             response.url, response.status_code)
         sys.exit(1)
 
-    def _resolve_device_ref(self, controller_ref):
+    def _resolve_device_info(self, controller_ref):
         r = self.session.get(
             "{}/enteliweb/wsds/getdevicelist?ObjRef=%2F%2F*%2F*.DEV*&searchStr="
             .format(self.host),
@@ -94,10 +94,15 @@ class EnteliwebExporter:
             data = json.loads(r.text)
         except json.JSONDecodeError:
             self._save_response_and_exit(r)
-        for key in data['deviceList']:
-            for ctrl in data['deviceList'][key]:
+        for platform in data['deviceList']:
+            for ctrl in data['deviceList'][platform]:
                 if ctrl['Ref'].startswith(controller_ref.rstrip('/') + '.'):
-                    return ctrl['Ref']
+                    return {
+                        'ref': ctrl['Ref'],
+                        'name': ctrl.get('Name', ''),
+                        'platform': platform,
+                        'model_name': ctrl.get('ModelName', ''),
+                    }
         logging.error(
             "Exiting: no device ref found for controller %s — "
             "got %d devices from %s",
@@ -108,7 +113,8 @@ class EnteliwebExporter:
 
     def discover_points(self, controller_ref):
         start = time.time()
-        device_ref = self._resolve_device_ref(controller_ref)
+        device_info = self._resolve_device_info(controller_ref)
+        device_ref = device_info['ref']
         r = self.session.post(
             "{}/enteliweb/wsdevice/objectlist".format(self.host),
             data={
@@ -129,7 +135,8 @@ class EnteliwebExporter:
                         self.login(self.username, self.password)
                     finally:
                         self._logging_in = False
-            device_ref = self._resolve_device_ref(controller_ref)
+            device_info = self._resolve_device_info(controller_ref)
+            device_ref = device_info['ref']
             r = self.session.post(
                 "{}/enteliweb/wsdevice/objectlist".format(self.host),
                 data={
@@ -155,7 +162,7 @@ class EnteliwebExporter:
                 })
         elapsed = time.time() - start
         logging.info(f"Discovered {len(points)} points on {controller_ref} in {elapsed:.1f}s")
-        return points
+        return points, device_info
 
     def _get_or_discover(self, controller_ref):
         wait_start = time.time()
@@ -165,7 +172,7 @@ class EnteliwebExporter:
                 now = time.time()
                 cached = self._point_cache.get(controller_ref)
                 if cached and (now - cached['timestamp']) < cached['ttl']:
-                    return cached['points']
+                    return cached['points'], cached['device_info']
                 if controller_ref in self._in_discovery:
                     # If we've waited too long, the discovering thread likely
                     # crashed.  Nuke the stale entry and retry.
@@ -183,7 +190,7 @@ class EnteliwebExporter:
                 time.sleep(0.5)
                 continue  # another thread is discovering, wait and retry
             try:
-                points = self.discover_points(controller_ref)
+                points, device_info = self.discover_points(controller_ref)
             except Exception:
                 with self.lock:
                     self._in_discovery.discard(controller_ref)
@@ -192,10 +199,11 @@ class EnteliwebExporter:
                 ttl = random.randint(int(self.discovery_ttl * 0.5),
                                      int(self.discovery_ttl * 1.5))
                 self._point_cache[controller_ref] = {
-                    'points': points, 'timestamp': time.time(), 'ttl': ttl
+                    'points': points, 'timestamp': time.time(), 'ttl': ttl,
+                    'device_info': device_info,
                 }
                 self._in_discovery.discard(controller_ref)
-            return points
+            return points, device_info
 
     def _fetch_values(self, refs):
         refs_str = '.Present_Value,'.join(refs) + '.Present_Value'
@@ -257,10 +265,14 @@ class EnteliwebExporter:
         lines.append(f'# HELP {metric_name} Current value')
         lines.append(f'# TYPE {metric_name} gauge')
 
-        points = self._get_or_discover(controller_ref)
+        points, device_info = self._get_or_discover(controller_ref)
 
         if handler and handler.wfile.closed:
             return  # client disconnected during discovery, save remaining work
+
+        platform = device_info.get('platform', '').replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
+        model = device_info.get('model_name', '').replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
+        controller_name = device_info.get('name', '').replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
 
         refs = [p['full_ref'] for p in points]
 
@@ -282,7 +294,10 @@ class EnteliwebExporter:
             info = point_map.get(ref, {})
             label = info.get('name', '')
             label = label.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
-            lines.append(f'{metric_name}{{bacnet_id="{ref}", label="{label}"}} {val}')
+            lines.append(
+                f'{metric_name}{{bacnet_id="{ref}", label="{label}", '
+                f'platform="{platform}", model="{model}", controller_name="{controller_name}"}} '
+                f'{val}')
 
         return '\n'.join(lines)
 
@@ -300,7 +315,8 @@ class EnteliwebExporter:
         return json.loads(raw)[0]
 
     def fetch_controller_programs(self, controller_ref):
-        device_ref = self._resolve_device_ref(controller_ref)
+        device_info = self._resolve_device_info(controller_ref)
+        device_ref = device_info['ref']
         r = self.session.post(
             "{}/enteliweb/wsdevice/objectlist".format(self.host),
             data={
