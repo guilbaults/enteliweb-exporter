@@ -32,6 +32,16 @@ class EnteliwebExporter:
         self.session.mount('http://', adapter)
         self.session.mount('https://', adapter)
 
+    @staticmethod
+    def _check_captcha(response):
+        if "For verification purposes, enter the text seen in the image below." in response.text:
+            logging.error(
+                "Captcha detected from %s (status %d) — "
+                "sleeping 60s and exiting",
+                response.url, response.status_code)
+            time.sleep(60)
+            sys.exit(1)
+
     def update_csrf_token(self):
         r = self.session.get("{}/enteliweb/".format(self.host), verify=self.verify, timeout=60)
         match = re.search(r'_token\s+= \"(.*)\";', r.text)
@@ -57,6 +67,7 @@ class EnteliwebExporter:
                 verify=self.verify,
                 timeout=60,
             )
+            self._check_captcha(r)
             try:
                 login_ok = r.json()['success']
             except json.JSONDecodeError:
