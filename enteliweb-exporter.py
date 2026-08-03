@@ -43,21 +43,21 @@ class EnteliwebExporter:
             sys.exit(1)
 
     def update_csrf_token(self):
-        r = self.session.get("{}/enteliweb/".format(self.host), verify=self.verify, timeout=60)
-        match = re.search(r'_token\s+= \"(.*)\";', r.text)
-        if not match:
-            logging.error(
-                "Exiting: could not extract CSRF token from %s — "
-                "response status %d, first 500 chars: %s",
-                self.host, r.status_code, r.text[:500])
-            sys.exit(1)
-        self.csrf_token = match.group(1)
+        with self.session.get("{}/enteliweb/".format(self.host), verify=self.verify, timeout=60) as r:
+            match = re.search(r'_token\s+= \"(.*)\";', r.text)
+            if not match:
+                logging.error(
+                    "Exiting: could not extract CSRF token from %s — "
+                    "response status %d, first 500 chars: %s",
+                    self.host, r.status_code, r.text[:500])
+                sys.exit(1)
+            self.csrf_token = match.group(1)
 
     def login(self, username, password):
         with self.lock:
             self.update_csrf_token()
 
-            r = self.session.post(
+            with self.session.post(
                 "{}/enteliweb/index/verify".format(self.host),
                 data={
                     "userName": base64.b64encode(username.encode('ascii')),
@@ -66,23 +66,23 @@ class EnteliwebExporter:
                 },
                 verify=self.verify,
                 timeout=60,
-            )
-            self._check_captcha(r)
-            try:
-                login_ok = r.json()['success']
-            except json.JSONDecodeError:
-                self._save_response_and_exit(r)
-            if login_ok is not True:
-                logging.error(
-                    "Exiting: login to %s failed — status %d, response: %s",
-                    self.host, r.status_code, r.text[:500])
-                sys.exit(1)
-            else:
-                logging.info("Login successful")
-            self.username = username
-            self.password = password
+            ) as r:
+                self._check_captcha(r)
+                try:
+                    login_ok = r.json()['success']
+                except json.JSONDecodeError:
+                    self._save_response_and_exit(r)
+                if login_ok is not True:
+                    logging.error(
+                        "Exiting: login to %s failed — status %d, response: %s",
+                        self.host, r.status_code, r.text[:500])
+                    sys.exit(1)
+                else:
+                    logging.info("Login successful")
+                self.username = username
+                self.password = password
 
-            self.update_csrf_token()
+                self.update_csrf_token()
 
     @staticmethod
     def _save_response_and_exit(response):
@@ -95,25 +95,25 @@ class EnteliwebExporter:
         sys.exit(1)
 
     def _resolve_device_info(self, controller_ref):
-        r = self.session.get(
+        with self.session.get(
             "{}/enteliweb/wsds/getdevicelist?ObjRef=%2F%2F*%2F*.DEV*&searchStr="
             .format(self.host),
             verify=self.verify,
             timeout=60,
-        )
-        try:
-            data = json.loads(r.text)
-        except json.JSONDecodeError:
-            self._save_response_and_exit(r)
-        for platform in data['deviceList']:
-            for ctrl in data['deviceList'][platform]:
-                if ctrl['Ref'].startswith(controller_ref.rstrip('/') + '.'):
-                    return {
-                        'ref': ctrl['Ref'],
-                        'name': ctrl.get('Name', ''),
-                        'platform': platform,
-                        'model_name': ctrl.get('ModelName', ''),
-                    }
+        ) as r:
+            try:
+                data = json.loads(r.text)
+            except json.JSONDecodeError:
+                self._save_response_and_exit(r)
+            for platform in data['deviceList']:
+                for ctrl in data['deviceList'][platform]:
+                    if ctrl['Ref'].startswith(controller_ref.rstrip('/') + '.'):
+                        return {
+                            'ref': ctrl['Ref'],
+                            'name': ctrl.get('Name', ''),
+                            'platform': platform,
+                            'model_name': ctrl.get('ModelName', ''),
+                        }
         logging.error(
             "Exiting: no device ref found for controller %s — "
             "got %d devices from %s",
@@ -126,7 +126,7 @@ class EnteliwebExporter:
         start = time.time()
         device_info = self._resolve_device_info(controller_ref)
         device_ref = device_info['ref']
-        r = self.session.post(
+        with self.session.post(
             "{}/enteliweb/wsdevice/objectlist".format(self.host),
             data={
                 "ObjRef": '["{}"]'.format(device_ref),
@@ -136,41 +136,41 @@ class EnteliwebExporter:
             },
             verify=self.verify,
             timeout=60,
-        )
-        if r.status_code == 401:
-            logging.info("Login expired during discovery, logging in again")
-            with self.lock:
-                if not self._logging_in:
-                    self._logging_in = True
-                    try:
-                        self.login(self.username, self.password)
-                    finally:
-                        self._logging_in = False
-            device_info = self._resolve_device_info(controller_ref)
-            device_ref = device_info['ref']
-            r = self.session.post(
-                "{}/enteliweb/wsdevice/objectlist".format(self.host),
-                data={
-                    "ObjRef": '["{}"]'.format(device_ref),
-                    "_csrfToken": self.csrf_token,
-                    "query": "",
-                    "sort": "ObjectInstance ASC",
-                },
-                verify=self.verify,
-                timeout=60,
-            )
-
-        try:
-            objects = json.loads(r.text)['objects']
-        except json.JSONDecodeError:
-            self._save_response_and_exit(r)
-        points = []
-        for obj in objects:
-            if re.search(r'\.(AI|AO|AV|BI|BO|CO)\d+', obj['FullRef'], re.IGNORECASE):
-                points.append({
-                    'full_ref': obj['FullRef'],
-                    'name': obj.get('Name', ''),
-                })
+        ) as r:
+            if r.status_code == 401:
+                logging.info("Login expired during discovery, logging in again")
+                with self.lock:
+                    if not self._logging_in:
+                        self._logging_in = True
+                        try:
+                            self.login(self.username, self.password)
+                        finally:
+                            self._logging_in = False
+                device_info = self._resolve_device_info(controller_ref)
+                device_ref = device_info['ref']
+                with self.session.post(
+                    "{}/enteliweb/wsdevice/objectlist".format(self.host),
+                    data={
+                        "ObjRef": '["{}"]'.format(device_ref),
+                        "_csrfToken": self.csrf_token,
+                        "query": "",
+                        "sort": "ObjectInstance ASC",
+                    },
+                    verify=self.verify,
+                    timeout=60,
+                ) as r:
+                    pass  # use retried response below
+            try:
+                objects = json.loads(r.text)['objects']
+            except json.JSONDecodeError:
+                self._save_response_and_exit(r)
+            points = []
+            for obj in objects:
+                if re.search(r'\.(AI|AO|AV|BI|BO|CO)\d+', obj['FullRef'], re.IGNORECASE):
+                    points.append({
+                        'full_ref': obj['FullRef'],
+                        'name': obj.get('Name', ''),
+                    })
         elapsed = time.time() - start
         logging.info(f"Discovered {len(points)} points on {controller_ref} in {elapsed:.1f}s")
         return points, device_info
@@ -222,36 +222,36 @@ class EnteliwebExporter:
             "input": refs_str,
             "_csrfToken": self.csrf_token,
         }
-        r = self.session.post(
+        with self.session.post(
             "{}/enteliweb/wsbacv3/getvalue".format(self.host),
             data=data,
             verify=self.verify,
             timeout=60,
-        )
-        if r.status_code == 401:
-            logging.info("Login expired during value fetch, logging in again")
-            with self.lock:
-                if not self._logging_in:
-                    self._logging_in = True
-                    try:
-                        self.login(self.username, self.password)
-                    finally:
-                        self._logging_in = False
-            data["_csrfToken"] = self.csrf_token
-            r = self.session.post(
-                "{}/enteliweb/wsbacv3/getvalue".format(self.host),
-                data=data,
-                verify=self.verify,
-                timeout=60,
-            )
+        ) as r:
             if r.status_code == 401:
-                logging.error(
-                    "Exiting: value fetch still 401 after re-login — "
-                    "status %d, response: %s",
-                    r.status_code, r.text[:500])
-                sys.exit(1)
-
-        return self._parse_values(r.text, refs)
+                logging.info("Login expired during value fetch, logging in again")
+                with self.lock:
+                    if not self._logging_in:
+                        self._logging_in = True
+                        try:
+                            self.login(self.username, self.password)
+                        finally:
+                            self._logging_in = False
+                data["_csrfToken"] = self.csrf_token
+                with self.session.post(
+                    "{}/enteliweb/wsbacv3/getvalue".format(self.host),
+                    data=data,
+                    verify=self.verify,
+                    timeout=60,
+                ) as r:
+                    if r.status_code == 401:
+                        logging.error(
+                            "Exiting: value fetch still 401 after re-login — "
+                            "status %d, response: %s",
+                            r.status_code, r.text[:500])
+                        sys.exit(1)
+                    return self._parse_values(r.text, refs)
+            return self._parse_values(r.text, refs)
 
     @staticmethod
     def _parse_values(response_text, refs):
@@ -314,21 +314,21 @@ class EnteliwebExporter:
 
     def get_controller_program(self, obj_ref):
         url = "{}/enteliweb/object/display?ObjRef={}".format(self.host, quote(obj_ref, safe=''))
-        r = self.session.get(url, verify=self.verify, timeout=30)
-        soup = BeautifulSoup(r.text, 'html.parser')
-        editor_div = soup.find('div', id='div_Program_Editor')
-        if not editor_div:
-            return None
-        textarea = editor_div.find('textarea', id='Editor')
-        if not textarea:
-            return None
-        raw = textarea.get_text()
-        return json.loads(raw)[0]
+        with self.session.get(url, verify=self.verify, timeout=30) as r:
+            soup = BeautifulSoup(r.text, 'html.parser')
+            editor_div = soup.find('div', id='div_Program_Editor')
+            if not editor_div:
+                return None
+            textarea = editor_div.find('textarea', id='Editor')
+            if not textarea:
+                return None
+            raw = textarea.get_text()
+            return json.loads(raw)[0]
 
     def fetch_controller_programs(self, controller_ref):
         device_info = self._resolve_device_info(controller_ref)
         device_ref = device_info['ref']
-        r = self.session.post(
+        with self.session.post(
             "{}/enteliweb/wsdevice/objectlist".format(self.host),
             data={
                 "ObjRef": '["{}"]'.format(device_ref),
@@ -338,11 +338,11 @@ class EnteliwebExporter:
             },
             verify=self.verify,
             timeout=60,
-        )
-        try:
-            objects = json.loads(r.text)['objects']
-        except json.JSONDecodeError:
-            self._save_response_and_exit(r)
+        ) as r:
+            try:
+                objects = json.loads(r.text)['objects']
+            except json.JSONDecodeError:
+                self._save_response_and_exit(r)
 
         program_dir = 'controller_programs'
         os.makedirs(program_dir, exist_ok=True)
