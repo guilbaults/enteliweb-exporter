@@ -44,7 +44,7 @@ class EnteliwebExporter:
                 "sleeping 60s and exiting",
                 response.url, response.status_code)
             time.sleep(60)
-            sys.exit(1)
+            os._exit(1)
 
     def update_csrf_token(self):
         with self.session.get("{}/enteliweb/".format(self.host), verify=self.verify, timeout=60) as r:
@@ -54,7 +54,7 @@ class EnteliwebExporter:
                     "Exiting: could not extract CSRF token from %s — "
                     "response status %d, first 500 chars: %s",
                     self.host, r.status_code, r.text[:500])
-                sys.exit(1)
+                os._exit(1)
             self.csrf_token = match.group(1)
 
     def login(self, username, password):
@@ -84,7 +84,7 @@ class EnteliwebExporter:
                     logging.error(
                         "Exiting: login to %s failed — status %d, response: %s",
                         self.host, r.status_code, r.text[:500])
-                    sys.exit(1)
+                    os._exit(1)
                 else:
                     logging.info("Login successful")
                 self.username = username
@@ -100,7 +100,7 @@ class EnteliwebExporter:
             "Exiting: JSON parse failed for %s (status %d) — "
             "raw response saved to debug_response.html",
             response.url, response.status_code)
-        sys.exit(1)
+        os._exit(1)
 
     def _resolve_device_info(self, controller_ref):
         with self.session.get(
@@ -128,7 +128,7 @@ class EnteliwebExporter:
             controller_ref,
             sum(len(v) for v in data['deviceList'].values()),
             self.host)
-        sys.exit(1)
+        os._exit(1)
 
     def discover_points(self, controller_ref):
         start = time.time()
@@ -257,7 +257,7 @@ class EnteliwebExporter:
                             "Exiting: value fetch still 401 after re-login — "
                             "status %d, response: %s",
                             r.status_code, r.text[:500])
-                        sys.exit(1)
+                        os._exit(1)
                     return self._parse_values(r.text, refs)
             return self._parse_values(r.text, refs)
 
