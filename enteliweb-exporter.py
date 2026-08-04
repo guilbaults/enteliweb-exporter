@@ -34,9 +34,13 @@ class EnteliwebExporter:
 
     @staticmethod
     def _check_captcha(response):
-        if "For verification purposes, enter the text seen in the image below." in response.text:
+        try:
+            result = response.json()
+        except json.JSONDecodeError:
+            return  # not JSON — let the caller handle it
+        if result.get("lockoutMsg") == "showcaptcha":
             logging.error(
-                "Captcha detected from %s (status %d) — "
+                "Captcha required from %s (status %d) — "
                 "sleeping 60s and exiting",
                 response.url, response.status_code)
             time.sleep(60)
@@ -60,7 +64,7 @@ class EnteliwebExporter:
             with self.session.post(
                 "{}/enteliweb/index/verify".format(self.host),
                 data={
-                    "userName": base64.b64encode(username.encode('ascii')),
+                    "username": base64.b64encode(username.encode('ascii')),
                     "password": base64.b64encode(password.encode('ascii')),
                     "_csrfToken": self.csrf_token,
                 },
@@ -69,10 +73,14 @@ class EnteliwebExporter:
             ) as r:
                 self._check_captcha(r)
                 try:
-                    login_ok = r.json()['success']
+                    result = r.json()
                 except json.JSONDecodeError:
                     self._save_response_and_exit(r)
-                if login_ok is not True:
+                lockout_msg = result.get("lockoutMsg")
+                if lockout_msg:
+                    logging.warning("lockoutMsg: %s", lockout_msg)
+                login_ok = result["success"]
+                if not login_ok:
                     logging.error(
                         "Exiting: login to %s failed — status %d, response: %s",
                         self.host, r.status_code, r.text[:500])
