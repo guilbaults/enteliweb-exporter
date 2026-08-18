@@ -174,7 +174,7 @@ class EnteliwebExporter:
                 self._save_response_and_exit(r)
             points = []
             for obj in objects:
-                if re.search(r'\.(AI|AO|AV|BI|BO|CO)\d+', obj['FullRef'], re.IGNORECASE):
+                if re.search(r'\.(AI|AO|AV|BI|BO|CO|BV)\d+', obj['FullRef'], re.IGNORECASE):
                     points.append({
                         'full_ref': obj['FullRef'],
                         'name': obj.get('Name', ''),
