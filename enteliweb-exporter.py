@@ -1,7 +1,5 @@
 import requests
-import json
 import sys
-import re
 import base64
 import configparser
 from prometheus_client.core import CounterMetricFamily, GaugeMetricFamily
@@ -18,19 +16,18 @@ class EnteliwebExporter:
         self.verify = verify
 
     def update_csrf_token(self):
-        s = self.session.get("{}/enteliweb/".format(self.host), verify=self.verify, timeout=10)
-        # grab the csrf token from the html
-        self.csrf_token = re.search(r'_token\s+= \"(.*)\";', s.text).group(1)
+        s = self.session.get("{}/enteliweb/wssession/getsessioninfo".format(self.host), verify=self.verify, timeout=10)
+        self.csrf_token = s.json()['token']
 
     def login(self, username, password):
-        self.update_csrf_token()
+        # Establish session
+        self.session.get("{}/enteliweb/".format(self.host), verify=self.verify, timeout=10)
 
         s = self.session.post("{}/enteliweb/index/verify".format(self.host),
             # Enteliweb is expecting a base64 encoded string
             data={
                 "userName": base64.b64encode(username.encode('ascii')),
-                "password": base64.b64encode(password.encode('ascii')),
-                "_csrfToken": self.csrf_token
+                "password": base64.b64encode(password.encode('ascii'))
             },
             verify=self.verify,
             timeout=10
