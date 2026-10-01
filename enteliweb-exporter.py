@@ -47,26 +47,28 @@ class EnteliwebExporter:
             os._exit(1)
 
     def update_csrf_token(self):
-        with self.session.get("{}/enteliweb/".format(self.host), verify=self.verify, timeout=60) as r:
-            match = re.search(r'_token\s+= \"(.*)\";', r.text)
-            if not match:
+        with self.session.get(
+            "{}/enteliweb/wssession/getsessioninfo".format(self.host),
+            verify=self.verify,
+            timeout=60,
+        ) as r:
+            try:
+                data = r.json()
+            except json.JSONDecodeError:
                 logging.error(
-                    "Exiting: could not extract CSRF token from %s — "
-                    "response status %d, first 500 chars: %s",
-                    self.host, r.status_code, r.text[:500])
+                    "Exiting: could not fetch CSRF token from %s — "
+                    "status %d, first 500 chars: %s",
+                    r.url, r.status_code, r.text[:500])
                 os._exit(1)
-            self.csrf_token = match.group(1)
+            self.csrf_token = data["token"]
 
     def login(self, username, password):
         with self.lock:
-            self.update_csrf_token()
-
             with self.session.post(
                 "{}/enteliweb/index/verify".format(self.host),
                 data={
                     "username": base64.b64encode(username.encode('ascii')),
                     "password": base64.b64encode(password.encode('ascii')),
-                    "_csrfToken": self.csrf_token,
                 },
                 verify=self.verify,
                 timeout=60,
@@ -79,17 +81,14 @@ class EnteliwebExporter:
                 lockout_msg = result.get("lockoutMsg")
                 if lockout_msg:
                     logging.warning("lockoutMsg: %s", lockout_msg)
-                login_ok = result["success"]
-                if not login_ok:
+                if not result["success"]:
                     logging.error(
                         "Exiting: login to %s failed — status %d, response: %s",
                         self.host, r.status_code, r.text[:500])
                     os._exit(1)
-                else:
-                    logging.info("Login successful")
+                logging.info("Login successful")
                 self.username = username
                 self.password = password
-
                 self.update_csrf_token()
 
     @staticmethod
